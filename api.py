@@ -31,42 +31,94 @@ def get_db_connection():
 def home_page():
     return jsonify({"message": "Welcome to the Machine Learning Model API!"})
 
+import os
+import json
+import psycopg2
+import joblib
+import pandas as pd
+from flask import Flask, request, jsonify
+from datetime import datetime
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+
+# Flask app
+app = Flask(__name__)
+
+
+
+# Directory to store models
+MODEL_DIR = "Models"
+
+# Function to connect to the database
+def get_db_connection():
+    try:
+        return psycopg2.connect(**DB_SETTINGS)
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        return None
+
+# 🔹 Endpoint to train a model
 @app.route("/train_model", methods=["POST"])
 def train_model():
     try:
-        # Get JSON data from request
+        # Get JSON request data
         req_data = request.get_json()
-        
+
+        # Validate required fields
         if not req_data or "data" not in req_data or "machine_model" not in req_data or "target_column" not in req_data:
             return jsonify({"error": "Invalid JSON format. Required keys: data, machine_model, target_column"}), 400
 
         machine_model = req_data["machine_model"]
         target_column = req_data["target_column"]
         table_data = req_data["data"]
+        passed_data_from_api = {}
+        print(f" target column: {type(table_data[0])}")
+        for input_data in table_data:
+            passed_data_from_api[input_data['name']] = input_data["values"]
+        new_table_data = passed_data_from_api
 
-        # Convert data to Pandas DataFrame
-        df = pd.DataFrame(table_data)
+        print(f" target column: {target_column}")
 
+        # Convert to DataFrame
+        df = pd.DataFrame(new_table_data)
+        
+
+        # Validate target column
         if target_column not in df.columns:
             return jsonify({"error": f"Target column '{target_column}' not found in data"}), 400
 
-        # Split features (X) and target (y)
+        # Separate features (X) and target (y)
         X = df.drop(columns=[target_column])
         y = df[target_column]
+        column_names = X.columns
+        target_column_name = y.name
+        print(X.head())
 
-        # Split data into train & test
+        # Capture input metadata
+        model_input_info = {
+            "columns": list(X.columns),
+            "shape": X.shape,
+            "data_types": {col: str(dtype) for col, dtype in X.dtypes.items()}
+        }
+        model_output_info = {
+            "output_column": target_column,
+            "output_type": str(y.dtype)
+        }
+
+        # Train-test split
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        # Train Linear Regression Model
+        # Train model
         model = LinearRegression()
         model.fit(X_train, y_train)
 
         # Save model
         model_filename = f"{machine_model}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pkl"
-        model_path = os.path.join(MODEL_DIR, model_filename)
+        os.makedirs(f"{MODEL_DIR}/{machine_model}", exist_ok=True)
+        model_path = os.path.join(f"{MODEL_DIR}/{machine_model}", model_filename)
         joblib.dump(model, model_path)
 
-        # Save model metadata to database
+        # Store metadata in the database
         conn = get_db_connection()
         if conn:
             try:
@@ -75,13 +127,57 @@ def train_model():
                     INSERT INTO trained_model (asset_model, model_name, model_directory, model_trained_date, model_input_info, model_output_info)
                     VALUES (%s, %s, %s, %s, %s, %s);
                     """
-                    model_input_info = ", ".join(X.columns)
-                    model_output_info = target_column
-
-                    cur.execute(query, (machine_model, model_filename, model_path, datetime.now(), model_input_info, model_output_info))
+                    cur.execute(query, (
+                        machine_model, 
+                        model_filename, 
+                        model_path, 
+                        datetime.now(), 
+                        json.dumps(model_input_info), 
+                        json.dumps(model_output_info)
+                    ))
                     conn.commit()
             except Exception as e:
                 print(f"Database insert error: {e}")
+            finally:
+                conn.close()
+
+        # 🔹 Perform inference on test data (max 20 samples)
+        num_samples = min(20, len(X_test))
+        X_test_sample = X_test.iloc[:num_samples]
+        y_pred = model.predict(X_test_sample)
+        df_dict = X_test_sample.to_dict(orient="records")
+        for i in range(len(df_dict)):
+            df_dict[i][f"{target_column_name}"] = y_pred[i] 
+
+        # 🔹 Save sensor data (predictions)
+        conn = get_db_connection()
+        if conn:
+            try:
+                with conn.cursor() as cur:
+                    for i in range(num_samples):
+                        query = """
+                            SELECT id FROM asset_lists WHERE asset_model = %s
+                        """
+                        cur.execute(query, (machine_model,))
+                        asset_id = cur.fetchone()
+                        # sensor_data = {
+                        #     "asset_model_id": asset_id,
+                        #     "sensor_data": json.dumps(df_dict[i]),
+                        #     "created_date": datetime.now(),
+                        # }
+                        query = """
+                        INSERT INTO sensor_data (asset_model_id, sensor_data, created_date, target_column)
+                        VALUES (%s, %s, %s, %s);
+                        """
+                        cur.execute(query, (
+                            asset_id, 
+                            json.dumps(df_dict[i]), 
+                            datetime.now(),
+                            target_column_name
+                        ))
+                    conn.commit()
+            except Exception as e:
+                print(f"Sensor data insert error: {e}")
             finally:
                 conn.close()
 
@@ -89,6 +185,7 @@ def train_model():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # 🔹 Endpoint to make predictions
 @app.route("/predict", methods=["POST"])
@@ -154,7 +251,7 @@ def predict():
         return jsonify({"error": str(e)}), 500
 
 # 🔹 Endpoint to get all asset lists
-@app.route("/assets", methods=["GET"])
+@app.route("/get_assets", methods=["GET"])
 def get_assets():
     try:
         # Connect to the database
@@ -165,7 +262,7 @@ def get_assets():
         assets = []
         try:
             with conn.cursor() as cur:
-                query = "SELECT id, asset_model, original_value, acquisition_date, non_depreciable_value, book_value FROM asset_list"
+                query = "SELECT id, asset_model, original_value, acquisition_date, non_depreciable_value, book_value FROM asset_lists"
                 cur.execute(query)
                 result = cur.fetchall()
                 
@@ -246,21 +343,23 @@ def get_sensor_data_by_asset():
             # Fetch the asset ID using the asset_model
             with conn.cursor() as cur:
                 query = """
-                    SELECT id FROM asset_list WHERE asset_model = %s
+                    SELECT id FROM asset_lists WHERE asset_model = %s
                 """
                 cur.execute(query, (asset_model,))
                 asset_id = cur.fetchone()
 
                 if not asset_id:
-                    return jsonify({"error": f"Asset model {asset_model} not found"}), 404
+                    return jsonify({"status": f"Asset Not Found"})
 
                 # Fetch all sensor data for the asset ID
                 query = """
-                    SELECT id, asset_model, sensor_data, created_date
-                    FROM sensor_data WHERE asset_model = %s
+                    SELECT id, asset_model_id, sensor_data, created_date, target_column
+                    FROM sensor_data WHERE asset_model_id = %s
                 """
-                cur.execute(query, (asset_model,))
+                cur.execute(query, (asset_id,))
                 result = cur.fetchall()
+                if not result:
+                    return jsonify({"status": "Asset Not Found"})
 
                 sensor_data = []
                 # Transform the query result into a list of dictionaries
@@ -269,7 +368,8 @@ def get_sensor_data_by_asset():
                         "id": row[0],
                         "assetModel": row[1],
                         "sensorData": row[2],  # Assuming sensor_data is stored as a JSON-like text field
-                        "createdDate": row[3].strftime("%Y-%m-%d %H:%M:%S")
+                        "createdDate": row[3].strftime("%Y-%m-%d %H:%M:%S"),
+                        "targetColumn": row[4]
                     }
                     sensor_data.append(sensor_record)
 
@@ -281,6 +381,49 @@ def get_sensor_data_by_asset():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# 🔹 Endpoint to add a new asset
+@app.route("/add_assets", methods=["POST"])
+def add_asset():
+    try:
+        # Get JSON data from request
+        req_data = request.get_json()
+
+        # Validate input
+        required_fields = ["asset_model", "original_value", "acquisition_date", "non_depreciable_value", "book_value"]
+        if not all(field in req_data for field in required_fields):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        asset_model = req_data["asset_model"]
+        original_value = req_data["original_value"]
+        acquisition_date = req_data["acquisition_date"]
+        non_depreciable_value = req_data["non_depreciable_value"]
+        book_value = req_data["book_value"]
+
+        # Connect to the database
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Failed to connect to the database"}), 500
+
+        try:
+            with conn.cursor() as cur:
+                # Insert new asset into asset_list table
+                query = """
+                    INSERT INTO asset_lists (asset_model, original_value, acquisition_date, non_depreciable_value, book_value)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                """
+                cur.execute(query, (asset_model, original_value, acquisition_date, non_depreciable_value, book_value))
+                asset_id = cur.fetchone()[0]  # Get the generated asset ID
+
+                # Commit transaction
+                conn.commit()
+        finally:
+            conn.close()
+
+        return jsonify({"message": "Asset added successfully", "asset_id": asset_id}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # Run the Flask app
