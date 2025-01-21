@@ -1,0 +1,70 @@
+# Full Instructions on How to Use the API
+
+## Prerequisites
+- Python 3.6 or higher
+- Virtual environment (recommended)
+
+## Installation
+1. Clone the repository:
+    ```bash
+    git clone https://github.com/ephremworku/gpm_AI_Thesis_API.git
+    ```
+2. Navigate to the project directory:
+    ```bash
+    cd gpm_AI_Thesis_API
+    ```
+3. Create a virtual environment:
+    ```bash
+    python -m venv venv
+    ```
+4. Activate the virtual environment:
+    - On Windows:
+        ```bash
+        venv\Scripts\activate
+        ```
+    - On macOS/Linux:
+        ```bash
+        source venv/bin/activate
+        ```
+5. Install the dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+6. Start the server:
+    ```bash
+    flask run
+    ```
+
+## API Endpoints
+
+### Retrieve Data
+- **Endpoint**: `/api/data`
+- **Method**: GET
+- **Description**: Retrieve data for processing.
+- **Example**:
+    ```bash
+    curl -X GET http://127.0.0.1:5000/api/data
+    ```
+
+### Train a New Model
+- **Endpoint**: `/api/train`
+- **Method**: POST
+- **Description**: Train a new model with provided data.
+- **Example**:
+    ```bash
+    curl -X POST http://127.0.0.1:5000/api/train -H "Content-Type: application/json" -d '{"data": "your_data_here"}'
+    ```
+
+### Get Training Results
+- **Endpoint**: `/api/results`
+- **Method**: GET
+- **Description**: Get the results of the model training.
+- **Example**:
+    ```bash
+    curl -X GET http://127.0.0.1:5000/api/results
+    ```
+
+## Additional Information
+- Ensure the server is running before making API requests.
+- Use appropriate headers and data formats as specified in the examples.
+- Refer to the API documentation for more detailed information on each endpoint.

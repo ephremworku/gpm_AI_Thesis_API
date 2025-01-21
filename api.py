@@ -9,6 +9,7 @@ from datetime import datetime
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from psycopg2 import sql
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -110,8 +111,18 @@ def train_model():
 
         # Train model
         model = LinearRegression()
+        print(X_train.shape, len(y_train)) 
         model.fit(X_train, y_train)
+        y_pred_test = model.predict(X_test)
 
+        # R squared score
+        r2 = r2_score(y_test, y_pred_test)
+        print(f"R-squared: {r2}")
+        # Mean absolute error
+        mse = mean_squared_error(y_test, y_pred_test)
+        mae = mean_absolute_error(y_test, y_pred_test)
+        print(f"Mean Squared Error: {mse}")
+        print(f"Mean Squared Error: {mae}")
         # Save model
         model_filename = f"{machine_model}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pkl"
         os.makedirs(f"{MODEL_DIR}/{machine_model}", exist_ok=True)
@@ -262,7 +273,7 @@ def get_assets():
         assets = []
         try:
             with conn.cursor() as cur:
-                query = "SELECT id, asset_model, original_value, acquisition_date, non_depreciable_value, book_value FROM asset_lists"
+                query = "SELECT id, asset_model, original_value, acquisition_date, non_depreciable_value, book_value, depreciation_rate, depreciation_period FROM asset_lists"
                 cur.execute(query)
                 result = cur.fetchall()
                 
@@ -274,7 +285,9 @@ def get_assets():
                         "originalValue": row[2],
                         "acquisitionDate": row[3].strftime("%Y-%m-%d"),
                         "nonDepreciableValue": row[4],
-                        "bookValue": row[5]
+                        "bookValue": row[5],
+                        "depreciationRate": row[6],
+                        "depreciationTimeInterval": row[7]
                     }
                     assets.append(asset)
         finally:
@@ -283,6 +296,7 @@ def get_assets():
         return jsonify(assets)
 
     except Exception as e:
+        print(f"Error: {e}")
         return jsonify({"error": str(e)}), 500
     
 # 🔹 Endpoint to get all sensor data
@@ -389,7 +403,7 @@ def add_asset():
         req_data = request.get_json()
 
         # Validate input
-        required_fields = ["asset_model", "original_value", "acquisition_date", "non_depreciable_value", "book_value"]
+        required_fields = ["asset_model", "original_value", "acquisition_date", "non_depreciable_value", "book_value", "depreciation_rate", "depreciation_period"]
         if not all(field in req_data for field in required_fields):
             return jsonify({"error": "Missing required fields"}), 400
 
@@ -398,6 +412,8 @@ def add_asset():
         acquisition_date = req_data["acquisition_date"]
         non_depreciable_value = req_data["non_depreciable_value"]
         book_value = req_data["book_value"]
+        depreciation_rate = req_data["depreciation_rate"]
+        depreciation_period = req_data["depreciation_period"]
 
         # Connect to the database
         conn = get_db_connection()
@@ -408,11 +424,11 @@ def add_asset():
             with conn.cursor() as cur:
                 # Insert new asset into asset_list table
                 query = """
-                    INSERT INTO asset_lists (asset_model, original_value, acquisition_date, non_depreciable_value, book_value)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO asset_lists (asset_model, original_value, acquisition_date, non_depreciable_value, book_value, depreciation_rate, depreciation_period)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """
-                cur.execute(query, (asset_model, original_value, acquisition_date, non_depreciable_value, book_value))
+                cur.execute(query, (asset_model, original_value, acquisition_date, non_depreciable_value, book_value, depreciation_rate, depreciation_period))
                 asset_id = cur.fetchone()[0]  # Get the generated asset ID
 
                 # Commit transaction
