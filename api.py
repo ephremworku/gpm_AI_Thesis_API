@@ -82,8 +82,6 @@ def train_model():
 
         # Convert to DataFrame
         df = pd.DataFrame(new_table_data)
-        
-
         # Validate target column
         if target_column not in df.columns:
             return jsonify({"error": f"Target column '{target_column}' not found in data"}), 400
